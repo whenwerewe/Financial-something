@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# hedger.py
+# hedger_resilient.py
 # this can in principle use any local csv though in practice just use the synthetics from the other file
 
 import os
@@ -201,7 +201,7 @@ def black_scholes(S: float, K: float, T: float, r: float, sigma: float,
 class AdvancedCrisisHedger:
     def __init__(self,
                  initial_capital: float = 0.0,
-                 delta_thresh: float = 0.1,
+                 delta_thresh: float = 0.005,
                  gamma_thresh: float = 0.01,
                  r: float = 0.01,
                  transaction_cost: float = 0.001,
@@ -243,7 +243,8 @@ class AdvancedCrisisHedger:
         te = np.zeros(n)
         pnl = np.zeros(n)
         gexp = np.zeros(n)
-        corr = np.zeros(n)
+        corr_returns = np.zeros(n)
+        corr_pnl = np.zeros(n)
         sig = data["Sigma"].to_numpy().flatten()
 
         trades = np.zeros(n)
@@ -283,6 +284,19 @@ class AdvancedCrisisHedger:
         te[0] = (port[0] - option_mt[0]) - self.initial_capital
         prev_delta = pos[0]
         dt = 1 / 252.0
+
+        def safe_corr(a, b):
+            a = np.asarray(a, dtype=float)
+            b = np.asarray(b, dtype=float)
+            mask = np.isfinite(a) & np.isfinite(b)
+            if mask.sum() < 2:
+                return 0.0
+            a = a[mask]; b = b[mask]
+            if np.std(a) == 0 or np.std(b) == 0:
+                return 0.0
+            return float(np.corrcoef(a, b)[0, 1])
+
+        win = 6
 
         for i in range(1, n):
             #guess vol
@@ -329,13 +343,30 @@ class AdvancedCrisisHedger:
             te[i] = (port[i] - option_mt[i]) - self.initial_capital
             gexp[i] = gamma * (pos[i] ** 2)
 
-            if i > 5:
+            if i >= (win - 1):
+                start = i - (win - 1)
+                spot_slice = S[start:i+1]
+                port_slice = port[start:i+1]
+                pnl_slice = port_slice[1:] - port_slice[:-1]
+
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    spot_ret = np.diff(spot_slice) / spot_slice[:-1]
+
+                #watch for zeros here
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    port_ret = np.diff(port_slice) / np.where(port_slice[:-1] == 0, np.nan, port_slice[:-1])
+
                 try:
-                    port_win = pd.Series(port[i - 5:i + 1])
-                    spot_win = pd.Series(S[i - 5:i + 1])
-                    corr[i] = float(port_win.corr(spot_win) or 0.0)
+                    corr_returns[i] = safe_corr(port_ret, spot_ret)
                 except Exception:
-                    corr[i] = 0.0
+                    corr_returns[i] = 0.0
+                try:
+                    corr_pnl[i] = safe_corr(pnl_slice, spot_ret)
+                except Exception:
+                    corr_pnl[i] = 0.0
+            else:
+                corr_returns[i] = 0.0
+                corr_pnl[i] = 0.0
 
             prev_delta = pos[i]
 
@@ -350,7 +381,8 @@ class AdvancedCrisisHedger:
             "tracking_error": te,
             "daily_pnl": pnl,
             "gamma_exposure": gexp,
-            "corr": corr,
+            "corr_returns": corr_returns,
+            "corr_pnl": corr_pnl,
             "trade": trades,
             "trade_cost": trade_costs
         }, index=dates)
@@ -360,12 +392,13 @@ class AdvancedCrisisHedger:
             "turnover": float(turnover),
             "total_costs": total_costs,
             "K_used": float(K),
-            "sell_option": self.sell_option
+            "sell_option": self.sell_option,
+            "initial_capital": float(self.initial_capital),
         }
         return df, meta
 
 #diagnostics
-def save_separate_pdfs(df: pd.DataFrame, meta: dict, prefix: str) -> List[str]:
+def save_pdfs(df: pd.DataFrame, meta: dict, prefix: str) -> List[str]:
     filenames = []
 
     #price+vol
@@ -385,9 +418,18 @@ def save_separate_pdfs(df: pd.DataFrame, meta: dict, prefix: str) -> List[str]:
     filenames.append(fname)
 
     #portfolio+option MTM
+    init_cap = float(meta.get("initial_capital", 0.0))
+    price_series = df["price"]
+    portfolio_series = df["portfolio"]
+    option_series = df["option_mt"]
+
+    #centre
+    portfolio_centered = portfolio_series - init_cap
+    option_centered = option_series - option_series.iloc[0] if len(option_series) > 0 else option_series
+
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(df.index, df["portfolio"], label="Portfolio Value")
-    ax.plot(df.index, df["option_mt"], label="Option Mark-to-Market")
+    ax.plot(df.index, portfolio_centered, label="Portfolio (minus initial capital)", linestyle='-', linewidth=1.5)
+    ax.plot(df.index, option_centered, label="Option MTM", linestyle='--', linewidth=1.5)
     ax.set_xlabel('Date')
     ax.set_ylabel('Value')
     ax.legend()
@@ -411,32 +453,20 @@ def save_separate_pdfs(df: pd.DataFrame, meta: dict, prefix: str) -> List[str]:
     plt.close(fig)
     filenames.append(fname)
 
-    #PnL daily+distribution
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(df.index, df["daily_pnl"], label="Daily PnL")
-    ax.set_xlabel('Date')
-    ax.set_ylabel('PnL')
-    ax.legend(loc="upper left")
-    ax_inset = ax.inset_axes([0.6, 0.6, 0.28, 0.28])
-    ax_inset.hist(df["daily_pnl"].dropna(), bins=40)
-    ax_inset.set_title("PnL distribution")
-    ax_inset.tick_params(axis='both', labelsize=8)
-    fig.tight_layout()
-    fname = os.path.join(OUTPUT_DIR, "figures", f"{prefix}_daily_pnl.pdf")
-    fig.savefig(fname, bbox_inches="tight")
-    plt.close(fig)
-    filenames.append(fname)
-
-    #gamma+correlation
+    #gamma + correlations (returns / pnl)
     fig, ax1 = plt.subplots(figsize=(10, 6))
     ax1.plot(df.index, df["gamma_exposure"], 'b-', label="Gamma Exposure")
     ax1.set_xlabel('Date')
     ax1.set_ylabel('Gamma Exposure', color='b')
     ax1.tick_params(axis='y', labelcolor='b')
     ax2 = ax1.twinx()
-    ax2.plot(df.index, df["corr"], 'r--', label="Corr")
-    ax2.set_ylabel('Corr', color='r')
+    # plot both correlation diagnostics on the twin axis
+    ax2.plot(df.index, df["corr_pnl"], 'r--', label="Corr (daily PnL vs spot ret)")
+    ax2.set_ylabel('Correlation', color='r')
     ax2.tick_params(axis='y', labelcolor='r')
+    # sensible legend combining both
+    lines_1, labels_1 = ax1.get_legend_handles_labels()
+    lines_2, labels_2 = ax2.get_legend_handles_labels()
     fig.tight_layout()
     fname = os.path.join(OUTPUT_DIR, "figures", f"{prefix}_gamma_corr.pdf")
     fig.savefig(fname, bbox_inches="tight")
@@ -455,7 +485,9 @@ def save_summary_csv(df: pd.DataFrame, meta: dict, prefix: str) -> str:
         "daily_pnl_mean": float(df["daily_pnl"].mean()),
         "daily_pnl_std": float(df["daily_pnl"].std()),
         "avg_gamma_exposure": float(df["gamma_exposure"].mean()),
-        "avg_corr": float(df["corr"].mean())
+        # updated summary fields: mean of the two new correlation diagnostics
+        "avg_corr_returns": float(df["corr_returns"].mean()),
+        "avg_corr_pnl": float(df["corr_pnl"].mean()),
     }
     df_sum = pd.DataFrame([summary])
     fname = os.path.join(OUTPUT_DIR, "data", f"{prefix}_summary.csv")
@@ -477,12 +509,12 @@ def run_demo(period: str, explicit_csv: Optional[str] = None, explicit_df: Optio
         T = 0.5
         r = 0.005
 
-    hedger = AdvancedCrisisHedger(initial_capital=0.0, r=r, sell_option=True, use_arch=False, auto_rescale_strike=auto_rescale_strike)
+    hedger = AdvancedCrisisHedger(initial_capital=S0*10, r=r, sell_option=True, use_arch=True, auto_rescale_strike=auto_rescale_strike)
     df, meta = hedger.hedge(data, K, T)
     prefix = f"hedge_{period}"
     timeseries_path = os.path.join(OUTPUT_DIR, "data", f"{prefix}_timeseries.csv")
     df.to_csv(timeseries_path)
-    figs = save_separate_pdfs(df, meta, prefix)
+    figs = save_pdfs(df, meta, prefix)
     summ = save_summary_csv(df, meta, prefix)
     return {"timeseries": timeseries_path, "figures": figs, "summary": summ}, df, meta
 

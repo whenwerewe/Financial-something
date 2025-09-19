@@ -96,7 +96,7 @@ def generate_2008_synthetic(
     
     #imitates 2008: high vol, many negative jumps, high persistence
     sigma0_annual = 0.60
-    mu_daily = -0.0006
+    mu_daily = -0.0003
     alpha = 0.07
     beta = 0.89
 
@@ -104,7 +104,7 @@ def generate_2008_synthetic(
     jump_mu = -0.06
     jump_sigma = 0.08
 
-    forced_jumps = [(25, -0.15), (80, -0.12), (150, 0.12)]  #guarantee the famous jumps we saw in reality
+    forced_jumps = [(25, -0.15), (80, -0.12), (230, -0.16)]  #force notable jumps
     s, r, v = _simulate_garch_jumps(
         n_days=n_days, s0=s0, mu_daily=mu_daily, sigma0_annual=sigma0_annual,
         alpha=alpha, beta=beta, omega=None,

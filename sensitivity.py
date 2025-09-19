@@ -116,8 +116,8 @@ def sensitivity_grid_and_save_pdf(period: str,
         xt = np.linspace(0, nx - 1, min(nx, 6)).astype(int)
         yt = np.linspace(0, ny - 1, min(ny, 6)).astype(int)
         ax.set_xticks(xt); ax.set_yticks(yt)
-        ax.set_xticklabels([f"{gamma_vals[k]:.4f}" for k in xt], rotation=45)
-        ax.set_yticklabels([f"{delta_vals[k]:.3f}" for k in yt])
+        ax.set_xticklabels([f"{gamma_vals[k]:.5f}" for k in xt], rotation=45)
+        ax.set_yticklabels([f"{delta_vals[k]:.4f}" for k in yt])
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("Tracking Error Std")
         fig.tight_layout()
@@ -200,11 +200,11 @@ def sensitivity_grid_and_save_pdf(period: str,
 #the strike and values will often need adjusting to match the relevant value here
 #if you pick a gamma range too large or too small you get no useful information
 result = sensitivity_grid_and_save_pdf("2008", K=5.25, T_years=1.0,
-                                      delta_vals=np.linspace(0.02,0.4,10),
-                                      gamma_vals=np.linspace(0.02,0.5,10),
+                                      delta_vals=np.linspace(0.002,0.04,10),
+                                      gamma_vals=np.linspace(0.01,0.4,10),
                                       hedger_kwargs={"initial_capital":0.0,"r":0.02,"transaction_cost":0.001})
-result = sensitivity_grid_and_save_pdf("2020", K=140, T_years=1.0,
-                                      delta_vals=np.linspace(0.02,0.4,10),
-                                      gamma_vals=np.linspace(0.003,0.008,10),
+result = sensitivity_grid_and_save_pdf("2020", K=80, T_years=1.0,
+                                      delta_vals=np.linspace(0.002, 0.0035,10),
+                                      gamma_vals=np.linspace(0.01055,0.01062,10),
                                       hedger_kwargs={"initial_capital":0.0,"r":0.02,"transaction_cost":0.001})
 print("Grid done:", result)
