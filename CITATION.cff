@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "citation for report"
+authors:
+  - family-names: Prabhu
+    given-names: Apoorv
+title: "Hedger report"
+version: 1.0
+identifiers:
+  - type: doi
+date-released: 2025-09-20
